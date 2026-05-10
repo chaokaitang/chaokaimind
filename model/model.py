@@ -166,14 +166,22 @@ class FeedForward(nn.Module):
         return self.dropout(self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x)))
 
 
-
-
-
-
-
+class ChaokaiMindBlock(nn.Module):
+    def __init__(self, config: ChaokaiMindConfig):
+        super().__init__()
+        self.self_attention = Attention(config)
+        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.mlp = FeedForward(config)
+        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+    def forward(self, hidden_states, position_embeddings, past_key_value=None, use_cache=False, attn_mask=None):
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states, past_key_value = self.self_attention(hidden_states, position_embeddings, past_key_value, use_cache, attn_mask)
+        hidden_states += residual
+        hidden_states += self.mlp(self.post_attention_layernorm(hidden_states))
+        return hidden_states, past_key_value
 
         
-
 
 
 
