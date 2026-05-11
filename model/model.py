@@ -181,7 +181,33 @@ class ChaokaiMindBlock(nn.Module):
         hidden_states += self.mlp(self.post_attention_layernorm(hidden_states))
         return hidden_states, past_key_value
 
-        
+class ChaokaiMindModel(nn.Module):
+    def __init__(self, config: ChaokaiMindConfig):
+        super().__init__()
+        self.config = config
+        self.token_embedding = nn.Embedding(self.config.vocab_size, self.config.hidden_size)
+        self.layers = nn.ModuleList([ChaokaiMindBlock(config) for _ in range(self.config.num_hidden_layers)])
+        self.norm = RMSNorm(self.config.hidden_size, eps=config.rms_norm_eps)
+        angle_cos, angle_sin = precompute_angles(self.config.head_dim, self.config.max_position_embeddings, rope_scaling=self.config.rope_scaling)
+        self.register_buffer("angle_cos", angle_cos, persistent=False)
+        self.register_buffer("angle_sin", angle_sin, persistent=False)
+    def forward(self, input_ids, attention_mask=None, past_key_values=None, use_cache=False):
+        batch_size, seq_len = input_ids.shape()
+        if hasattr(past_key_values, "layers"):
+            past_key_values = None
+        past_key_values = past_key_values or [None] * len(self.layers)
+        start_pos = past_key_values[0][0].shape[1] if past_key_values[0] is not None else 0
+        hidden_states = self.token_embedding(input_ids)
+        if self.angle_cos[0, 0] == 0:
+            angle_cos, angle_sin = precompute_angles(self.config.head_dim, self.config.max_position_embeddings,rope_base = self.config.rope_theta, rope_scaling=self.config.rope_scaling)
+            self.angle_cos, self.angle_sin = angle_cos.to(hidden_states.device), angle_sin.to(hidden_states.device)
+        position_embeddings = (self.angle_cos[start_pos: start_pos + seq_len], self.angle_sin[start_pos: start_pos + seq_len])
+        present_key_values = []
+        for layer, past_key_value in zip(self.layers, past_key_values):
+            hidden_states, present_key_value = layer(hidden_states, position_embeddings, past_key_value, use_cache, attention_mask)
+            present_key_values.append(present_key_value)
+        hidden_states = self.norm(hidden_states)
+        return hidden_states, present_key_values    
 
 
 
