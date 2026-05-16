@@ -1,9 +1,11 @@
 import math
+from typing import Optional, Tuple
 import torch
 import torch.nn as nn
-from transformers import PretrainedConfig
+from transformers import GenerationMixin, PreTrainedModel, PretrainedConfig
 import torch.nn.functional as F
 from transformers.activations import ACT2FN
+from transformers.modeling_outputs import CausalLMOutputWithPast
 
 
 class ChaokaiMindConfig(PretrainedConfig):
@@ -192,7 +194,7 @@ class ChaokaiMindModel(nn.Module):
         self.register_buffer("angle_cos", angle_cos, persistent=False)
         self.register_buffer("angle_sin", angle_sin, persistent=False)
     def forward(self, input_ids, attention_mask=None, past_key_values=None, use_cache=False):
-        batch_size, seq_len = input_ids.shape()
+        batch_size, seq_len = input_ids.shape
         if hasattr(past_key_values, "layers"):
             past_key_values = None
         past_key_values = past_key_values or [None] * len(self.layers)
@@ -209,6 +211,20 @@ class ChaokaiMindModel(nn.Module):
         hidden_states = self.norm(hidden_states)
         return hidden_states, present_key_values    
 
+class ChaokaiMindForCausalLM(PreTrainedModel, GenerationMixin):
+    config_class = ChaokaiMindConfig 
+    def __init__(self, config: ChaokaiMindConfig):
+        super().__init__(config)
+        self.config = config
+        self.model = ChaokaiMindModel(config)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        if config.tie_word_embeddings:
+            self.lm_head.weight = self.model.token_embedding.weight
+    def forward(self, input_ids: Optional[torch.LongTensor] = None, attention_mask: Optional[torch.Tensor] = None, past_key_values: Optional[Tuple[torch.Tensor]] = None, use_cache: bool = False, logits_to_keep=0, **kwargs) -> CausalLMOutputWithPast:
+        hidden_states, past_key_values = self.model(input_ids, attention_mask, past_key_values, use_cache)
+        slice_indices = slice(-logits_to_keep, None) if logits_to_keep > 0 else slice(None)
+        logits = self.lm_head(hidden_states[:, slice_indices, :])
+        return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values, hidden_states=hidden_states)
 
 
 
