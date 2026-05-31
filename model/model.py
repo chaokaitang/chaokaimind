@@ -220,11 +220,16 @@ class ChaokaiMindForCausalLM(PreTrainedModel, GenerationMixin):
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         if config.tie_word_embeddings:
             self.lm_head.weight = self.model.token_embedding.weight
-    def forward(self, input_ids: Optional[torch.LongTensor] = None, attention_mask: Optional[torch.Tensor] = None, past_key_values: Optional[Tuple[torch.Tensor]] = None, use_cache: bool = False, logits_to_keep=0, **kwargs) -> CausalLMOutputWithPast:
+    def forward(self, input_ids: Optional[torch.LongTensor] = None, attention_mask: Optional[torch.Tensor] = None, past_key_values: Optional[Tuple[torch.Tensor]] = None, use_cache: bool = False, logits_to_keep=0, labels=None, **kwargs) -> CausalLMOutputWithPast:
         hidden_states, past_key_values = self.model(input_ids, attention_mask, past_key_values, use_cache)
         slice_indices = slice(-logits_to_keep, None) if logits_to_keep > 0 else slice(None)
         logits = self.lm_head(hidden_states[:, slice_indices, :])
-        return CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values, hidden_states=hidden_states)
+        loss = None
+        if labels is not None:
+            x, y = logits[..., :-1, :].contiguous(), labels[..., 1:].contiguous()
+            loss = F.cross_entropy(x.view(-1, x.size(-1)), y.view(-1), ignore_index=-100)
+        
+        return CausalLMOutputWithPast(loss=loss, logits=logits, past_key_values=past_key_values, hidden_states=hidden_states)
 
 
 
