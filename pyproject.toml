@@ -13,4 +13,5 @@ dependencies = [
     "pandas",
     "rich",
     "ruff",
+    "swanlab>=0.7.18",
 ]
