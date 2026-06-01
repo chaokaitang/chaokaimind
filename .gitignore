@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+#dataset
+*.json
+*.jsonl
+
+# output
+*.pth

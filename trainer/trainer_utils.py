@@ -12,7 +12,7 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import Sampler
-from transformers import AutoTokenizer, AutoModel, AutoModelForSequenceClassification
+from transformers import AutoTokenizer, AutoModel
 from model.model import ChaokaiMindForCausalLM
 
 def get_model_params(model, config):
@@ -24,8 +24,10 @@ def get_model_params(model, config):
     shared_expert = sum(p.numel() for n, p in model.named_parameters() if 'mlp.shared_experts.0.' in n) / 1e6
     base = total - (expert * n_routed) - (shared_expert * n_shared)
     active = base + (expert * n_active) + (shared_expert * n_shared)
-    if active < total: Logger(f'Model Params: {total:.2f}M-A{active:.2f}M')
-    else: Logger(f'Model Params: {total:.2f}M')
+    if active < total:
+        Logger(f'Model Params: {total:.2f}M-A{active:.2f}M')
+    else:
+        Logger(f'Model Params: {total:.2f}M')
 
 
 def is_main_process():

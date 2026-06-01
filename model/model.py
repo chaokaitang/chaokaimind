@@ -179,8 +179,10 @@ class ChaokaiMindBlock(nn.Module):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states, past_key_value = self.self_attention(hidden_states, position_embeddings, past_key_value, use_cache, attn_mask)
-        hidden_states += residual
-        hidden_states += self.mlp(self.post_attention_layernorm(hidden_states))
+        hidden_states = hidden_states + residual
+        residual = hidden_states
+        hidden_states = self.mlp(self.post_attention_layernorm(hidden_states))
+        hidden_states = hidden_states + residual
         return hidden_states, past_key_value
 
 class ChaokaiMindModel(nn.Module):
@@ -190,7 +192,12 @@ class ChaokaiMindModel(nn.Module):
         self.token_embedding = nn.Embedding(self.config.vocab_size, self.config.hidden_size)
         self.layers = nn.ModuleList([ChaokaiMindBlock(config) for _ in range(self.config.num_hidden_layers)])
         self.norm = RMSNorm(self.config.hidden_size, eps=config.rms_norm_eps)
-        angle_cos, angle_sin = precompute_angles(self.config.head_dim, self.config.max_position_embeddings, rope_scaling=self.config.rope_scaling)
+        angle_cos, angle_sin = precompute_angles(
+            self.config.head_dim,
+            self.config.max_position_embeddings,
+            base=self.config.rope_theta,
+            rope_scaling=self.config.rope_scaling,
+        )
         self.register_buffer("angle_cos", angle_cos, persistent=False)
         self.register_buffer("angle_sin", angle_sin, persistent=False)
     def forward(self, input_ids, attention_mask=None, past_key_values=None, use_cache=False):
@@ -200,9 +207,6 @@ class ChaokaiMindModel(nn.Module):
         past_key_values = past_key_values or [None] * len(self.layers)
         start_pos = past_key_values[0][0].shape[1] if past_key_values[0] is not None else 0
         hidden_states = self.token_embedding(input_ids)
-        if self.angle_cos[0, 0] == 0:
-            angle_cos, angle_sin = precompute_angles(self.config.head_dim, self.config.max_position_embeddings,rope_base = self.config.rope_theta, rope_scaling=self.config.rope_scaling)
-            self.angle_cos, self.angle_sin = angle_cos.to(hidden_states.device), angle_sin.to(hidden_states.device)
         position_embeddings = (self.angle_cos[start_pos: start_pos + seq_len], self.angle_sin[start_pos: start_pos + seq_len])
         present_key_values = []
         for layer, past_key_value in zip(self.layers, past_key_values):
@@ -222,14 +226,20 @@ class ChaokaiMindForCausalLM(PreTrainedModel, GenerationMixin):
             self.lm_head.weight = self.model.token_embedding.weight
     def forward(self, input_ids: Optional[torch.LongTensor] = None, attention_mask: Optional[torch.Tensor] = None, past_key_values: Optional[Tuple[torch.Tensor]] = None, use_cache: bool = False, logits_to_keep=0, labels=None, **kwargs) -> CausalLMOutputWithPast:
         hidden_states, past_key_values = self.model(input_ids, attention_mask, past_key_values, use_cache)
-        slice_indices = slice(-logits_to_keep, None) if logits_to_keep > 0 else slice(None)
-        logits = self.lm_head(hidden_states[:, slice_indices, :])
         loss = None
         if labels is not None:
-            x, y = logits[..., :-1, :].contiguous(), labels[..., 1:].contiguous()
-            loss = F.cross_entropy(x.view(-1, x.size(-1)), y.view(-1), ignore_index=-100)
+            full_logits = self.lm_head(hidden_states)
+            shift_logits = full_logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+            loss = F.cross_entropy(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1),
+                ignore_index=-100,
+            )
+            logits = full_logits[:, -logits_to_keep:, :] if logits_to_keep > 0 else full_logits
+        else:
+            slice_indices = slice(-logits_to_keep, None) if logits_to_keep > 0 else slice(None)
+            logits = self.lm_head(hidden_states[:, slice_indices, :])
         
         return CausalLMOutputWithPast(loss=loss, logits=logits, past_key_values=past_key_values, hidden_states=hidden_states)
-
-
 

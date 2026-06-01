@@ -11,7 +11,7 @@ import warnings
 import torch
 import torch.distributed as dist
 from contextlib import nullcontext
-from torch import optim, nn
+from torch import optim
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from model.model import ChaokaiMindConfig
@@ -30,7 +30,26 @@ from trainer.trainer_utils import (
 warnings.filterwarnings("ignore")
 
 
+def save_training_checkpoint(epoch, step, wandb=None):
+    if not is_main_process():
+        return
+    model.eval()
+    lm_checkpoint(
+        lm_config,
+        weight=args.save_weight,
+        model=model,
+        optimizer=optimizer,
+        epoch=epoch,
+        step=step,
+        wandb=wandb,
+        save_dir=args.save_dir,
+        scaler=scaler,
+    )
+    model.train()
+
+
 def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
+    model.train()
     start_time = time.time()  # 记录开始时间
     last_step = start_step  # 初始化最后一步为起始步骤
 
@@ -50,6 +69,7 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
 
         scaler.scale(loss).backward()
 
+        did_optimizer_step = False
         if step % args.accumulation_steps == 0:
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
@@ -58,6 +78,7 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
             scaler.update()
 
             optimizer.zero_grad(set_to_none=True)
+            did_optimizer_step = True
 
         if step % args.log_interval == 0 or step == iters:
             spend_time = time.time() - start_time  # 计算已用时间
@@ -78,7 +99,10 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
                     }
                 )
 
-        del input_ids, labels, res, loss
+        if did_optimizer_step and step % args.save_interval == 0:
+            save_training_checkpoint(epoch, step, wandb)
+
+        del input_ids, attention_mask, labels, res, loss
 
     if last_step > start_step and last_step % args.accumulation_steps != 0:
         scaler.unscale_(optimizer)
@@ -86,6 +110,9 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
+
+    if last_step > start_step:
+        save_training_checkpoint(epoch, last_step, wandb)
 
 
 if __name__ == "__main__":
@@ -133,6 +160,12 @@ if __name__ == "__main__":
         help="预训练数据路径",
     )
     parser.add_argument(
+        "--tokenizer_path",
+        type=str,
+        default="../model",
+        help="tokenizer目录或Hugging Face模型名",
+    )
+    parser.add_argument(
         "--from_weight",
         default="none",
         type=str,
@@ -172,7 +205,7 @@ if __name__ == "__main__":
         use_moe=bool(args.use_moe),
     )
     ckp_data = (
-        lm_checkpoint(lm_config, weight=args.save_weight, save_dir="../checkpoints")
+        lm_checkpoint(lm_config, weight=args.save_weight, save_dir=args.save_dir)
         if args.from_resume == 1
         else None
     )
@@ -197,7 +230,12 @@ if __name__ == "__main__":
         )
 
     # ========== 5. 定义模型、数据、优化器 ==========
-    model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
+    model, tokenizer = init_model(
+        lm_config,
+        args.from_weight,
+        tokenizer_path=args.tokenizer_path,
+        device=args.device,
+    )
     train_ds = PretrainDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == "float16"))
