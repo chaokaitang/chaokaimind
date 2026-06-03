@@ -5,10 +5,13 @@ set -o pipefail
 
 cd /root/chaokaimind
 
+export OMP_NUM_THREADS=4
+
 echo "===== $(date) Start Full SFT ====="
 
 python -u trainer/train_full_sft.py \
   --data_path /root/chaokaimind/dataset/sft_t2t_mini.jsonl \
+  --tokenizer_path /root/chaokaimind/model \
   --save_dir /root/autodl-tmp/out \
   --save_weight full_sft \
   --from_weight pretrain \

@@ -153,6 +153,12 @@ if __name__ == "__main__":
         help="训练数据路径",
     )
     parser.add_argument(
+        "--tokenizer_path",
+        type=str,
+        default="../model",
+        help="tokenizer目录或Hugging Face模型名",
+    )
+    parser.add_argument(
         "--from_weight",
         default="pretrain",
         type=str,
@@ -216,8 +222,13 @@ if __name__ == "__main__":
             project=args.wandb_project, name=wandb_run_name, id=wandb_id, resume=resume
         )
 
-    # ========== 5. 定义模型、数据、优化器 ==========
-    model, tokenizer = init_model(lm_config, args.from_weight, device=args.device)
+        # ========== 5. 定义模型、数据、优化器 ==========
+    model, tokenizer = init_model(
+        lm_config,
+        args.from_weight,
+        tokenizer_path=args.tokenizer_path,
+        device=args.device,
+    )
     train_ds = SFTDataset(args.data_path, tokenizer, max_length=args.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
     scaler = torch.cuda.amp.GradScaler(enabled=(args.dtype == "float16"))
