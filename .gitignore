@@ -12,6 +12,7 @@ wheels/
 #dataset
 *.json
 *.jsonl
+*.zip
 
 # output
 *.pth
